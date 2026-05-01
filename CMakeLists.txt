@@ -125,10 +125,41 @@ if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   ament_lint_auto_find_test_dependencies()
 
+  # ---------------------------------------------------------------------------
+  # C++ lifecycle unit test
+  # ---------------------------------------------------------------------------
   find_package(ament_cmake_gtest REQUIRED)
-  # Tests will be added in the tests ticket.
-  # ament_add_gtest(test_node_lifecycle test/test_node_lifecycle.cpp)
-  # ament_target_dependencies(test_node_lifecycle rclcpp rclcpp_lifecycle)
+  find_package(lifecycle_msgs REQUIRED)
+
+  # Compile livekit_node sources directly into the test binary so no separate
+  # library target is required.  src/main.cpp is excluded — gtest_main provides
+  # its own entry point.
+  ament_add_gtest(test_node_lifecycle
+    test/test_node_lifecycle.cpp
+    src/livekit_node.cpp
+    src/track_publisher.cpp
+    src/track_subscriber.cpp
+  )
+  target_include_directories(test_node_lifecycle
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  target_link_libraries(test_node_lifecycle ${OpenCV_LIBS})
+  ament_target_dependencies(test_node_lifecycle
+    rclcpp
+    rclcpp_lifecycle
+    lifecycle_msgs
+    sensor_msgs
+    std_msgs
+    cv_bridge
+    diagnostic_msgs
+    diagnostic_updater
+  )
+
+  # ---------------------------------------------------------------------------
+  # Python launch_testing round-trip integration test
+  # ---------------------------------------------------------------------------
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_track_round_trip.py)
 endif()
 
 # ---------------------------------------------------------------------------

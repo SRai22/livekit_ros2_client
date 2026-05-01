@@ -30,7 +30,13 @@
   <!-- Test dependencies -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
+  <!-- C++ unit tests -->
   <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>lifecycle_msgs</test_depend>
+  <!-- Python launch_testing integration test -->
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>launch_ros</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>
