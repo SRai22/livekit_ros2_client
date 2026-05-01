@@ -15,8 +15,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Build options
 # ---------------------------------------------------------------------------
 option(LIVEKIT_FETCH_SDK
-  "Fetch and build the LiveKit C++ SDK from source via FetchContent (requires Rust/cargo). \
-   Disable for skeleton/CI builds where the SDK is not yet available."
+  "Fetch and build the LiveKit C++ SDK via FetchContent. Requires Rust/cargo."
   OFF)
 
 # ---------------------------------------------------------------------------
@@ -47,17 +46,16 @@ find_package(diagnostic_updater REQUIRED)
 # CMake target exposed by SDK: livekit
 if(LIVEKIT_FETCH_SDK)
   include(FetchContent)
-  FetchContent_Declare(
+  fetchcontent_declare(
     livekit_cpp
     GIT_REPOSITORY https://github.com/livekit/client-sdk-cpp.git
     GIT_TAG        332008c81aede1f263aee17e40dcb39cfda922d7
     GIT_SUBMODULES_RECURSE TRUE
-    # Disable SDK's own examples and tests to keep our build lean
     CMAKE_ARGS
       -DLIVEKIT_BUILD_EXAMPLES=OFF
       -DLIVEKIT_BUILD_TESTS=OFF
   )
-  FetchContent_MakeAvailable(livekit_cpp)
+  fetchcontent_makeavailable(livekit_cpp)
 endif()
 
 # ---------------------------------------------------------------------------
