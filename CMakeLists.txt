@@ -65,6 +65,7 @@ add_executable(livekit_ros2_client_node
   src/main.cpp
   src/livekit_node.cpp
   src/track_publisher.cpp
+  src/track_subscriber.cpp
 )
 
 target_include_directories(livekit_ros2_client_node

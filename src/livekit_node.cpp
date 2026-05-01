@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "livekit_ros2_client/track_publisher.hpp"
+#include "livekit_ros2_client/track_subscriber.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 // LiveKit C++ SDK headers — only compiled when built with -DLIVEKIT_FETCH_SDK=ON.
@@ -178,17 +179,31 @@ LiveKitNode::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   room_ = std::make_unique<RoomImpl>();
 
-#ifdef LIVEKIT_FETCH_SDK
-  // Register room-level callbacks before connect().
-  // Callbacks execute on the SDK thread pool — they must not touch ROS2
-  // publishers directly. Future tickets will post work back via
-  // sdk_callback_group_ using one-shot wall timers.
+  // TrackSubscriber must be created here so its SDK callbacks are registered
+  // on the Room before room->connect() is called in on_activate.
+  track_subscriber_ =
+    std::make_unique<TrackSubscriber>(this, sdk_callback_group_);
 
-  // room_.room.setOnDisconnected([this]() {
+#ifdef LIVEKIT_FETCH_SDK
+  // Register room-level callbacks before connect().  All callbacks run on the
+  // SDK thread pool; they must not call publisher->publish() directly.
+  // TrackSubscriber::on_video_frame / on_data_received are thread-safe and
+  // enqueue work for the MutuallyExclusive drain timer on the ROS2 executor.
+
+  // room_->room.setOnDisconnected([this]() {
   //   RCLCPP_WARN(get_logger(), "LiveKit room disconnected");
   // });
-  // room_.room.setOnConnectionStateChanged([this](livekit::ConnectionState s) {
+  // room_->room.setOnConnectionStateChanged([this](livekit::ConnectionState s) {
   //   RCLCPP_INFO(get_logger(), "Connection state: %d", static_cast<int>(s));
+  // });
+  // room_->room.setOnTrackSubscribed([this](livekit::RemoteTrack track) {
+  //   track.setOnFrame([this, track](livekit::VideoFrame frame) {
+  //     track_subscriber_->on_video_frame(
+  //       frame.dataI420(), frame.width(), frame.height());
+  //   });
+  // });
+  // room_->room.setOnDataReceived([this](const uint8_t * data, size_t len) {
+  //   track_subscriber_->on_data_received(data, len);
   // });
 
   RCLCPP_INFO(get_logger(), "LiveKit SDK Room created, callbacks registered");
@@ -264,6 +279,8 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   track_publisher_ = std::make_unique<TrackPublisher>(this, std::move(data_fn));
   track_publisher_->activate();
 
+  track_subscriber_->activate();
+
   RCLCPP_INFO(get_logger(), "Activated");
   return CallbackReturn::SUCCESS;
 }
@@ -279,6 +296,10 @@ LiveKitNode::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
   if (track_publisher_) {
     track_publisher_->deactivate();
     track_publisher_.reset();
+  }
+
+  if (track_subscriber_) {
+    track_subscriber_->deactivate();
   }
 
   if (room_ && room_->connected) {
@@ -300,6 +321,7 @@ LiveKitNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up...");
   track_publisher_.reset();
+  track_subscriber_.reset();
   room_.reset();
   RCLCPP_INFO(get_logger(), "Cleaned up");
   return CallbackReturn::SUCCESS;
@@ -313,6 +335,7 @@ LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down...");
   track_publisher_.reset();
+  track_subscriber_.reset();
   if (room_ && room_->connected) {
 #ifdef LIVEKIT_FETCH_SDK
     // room_->room.disconnect();

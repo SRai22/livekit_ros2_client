@@ -24,8 +24,9 @@
 namespace livekit_ros2_client
 {
 
-// Forward-declared so track_publisher.hpp stays out of this public header.
+// Forward-declared so implementation headers stay out of this public header.
 class TrackPublisher;
+class TrackSubscriber;
 
 class LIVEKIT_ROS2_CLIENT_PUBLIC LiveKitNode
   : public rclcpp_lifecycle::LifecycleNode
@@ -54,6 +55,9 @@ private:
 
   // Publishes ROS2 topics as LiveKit tracks.  Created on activate, destroyed on deactivate.
   std::unique_ptr<TrackPublisher> track_publisher_;
+
+  // Receives LiveKit tracks and republishes on ROS2.  Created on configure, lives until cleanup.
+  std::unique_ptr<TrackSubscriber> track_subscriber_;
 };
 
 }  // namespace livekit_ros2_client
