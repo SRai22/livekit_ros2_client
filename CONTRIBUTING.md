@@ -1,22 +1,15 @@
-# Contributing to livekit_ros2_client
+Copyright 2026 livekit_ros2_client contributors
 
-Thank you for your interest in contributing!
+Any contribution that you make to this repository will
+be under the Apache 2 License, as dictated by that
+[license](http://www.apache.org/licenses/LICENSE-2.0.html):
 
-## How to Contribute
-
-1. Fork the repository and create a feature branch from `main`.
-2. Follow the [ROS 2 developer guide](https://docs.ros.org/en/jazzy/Contributing/Developer-Guide.html) for code style and commit conventions.
-3. Ensure `colcon build` and `colcon test` both pass before opening a pull request.
-4. Open a pull request against `main` describing the motivation and change.
-
-## Code Style
-
-- C++17, `ament_cmake` build system, `rclcpp` / `rclcpp_lifecycle` APIs.
-- No `using namespace std` or `using namespace rclcpp` in headers.
-- All public API symbols must be annotated with `LIVEKIT_ROS2_CLIENT_PUBLIC` from `visibility_control.hpp`.
-- Run `ament_clang_format` before committing: `ament_clang_format --reformat src/ include/`.
-
-## License
-
-By contributing you agree that your contributions are licensed under the Apache License 2.0.
-See [LICENSE](LICENSE) for the full text.
+~~~
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+~~~
