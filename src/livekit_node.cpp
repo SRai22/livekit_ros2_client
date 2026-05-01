@@ -16,7 +16,9 @@
 
 #include <cstdlib>
 #include <string>
+#include <vector>
 
+#include "livekit_ros2_client/track_publisher.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 // LiveKit C++ SDK headers — only compiled when built with -DLIVEKIT_FETCH_SDK=ON.
@@ -247,6 +249,21 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   room_->connected = true;
 #endif
 
+  // Build the data-channel publish callback and activate the track publisher.
+  // The lambda is SDK-guarded; without the SDK it is a no-op.
+  auto data_fn = [this](std::vector<uint8_t> payload) {
+#ifdef LIVEKIT_FETCH_SDK
+      // room_->room.localParticipant()->publishData(
+      //   payload.data(), payload.size(), /*reliable=*/true);
+      (void)payload;
+#else
+      (void)payload;
+#endif
+    };
+
+  track_publisher_ = std::make_unique<TrackPublisher>(this, std::move(data_fn));
+  track_publisher_->activate();
+
   RCLCPP_INFO(get_logger(), "Activated");
   return CallbackReturn::SUCCESS;
 }
@@ -258,6 +275,11 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Deactivating...");
+
+  if (track_publisher_) {
+    track_publisher_->deactivate();
+    track_publisher_.reset();
+  }
 
   if (room_ && room_->connected) {
 #ifdef LIVEKIT_FETCH_SDK
@@ -277,6 +299,7 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up...");
+  track_publisher_.reset();
   room_.reset();
   RCLCPP_INFO(get_logger(), "Cleaned up");
   return CallbackReturn::SUCCESS;
@@ -289,6 +312,7 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down...");
+  track_publisher_.reset();
   if (room_ && room_->connected) {
 #ifdef LIVEKIT_FETCH_SDK
     // room_->room.disconnect();

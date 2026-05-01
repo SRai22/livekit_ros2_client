@@ -24,6 +24,9 @@
 namespace livekit_ros2_client
 {
 
+// Forward-declared so track_publisher.hpp stays out of this public header.
+class TrackPublisher;
+
 class LIVEKIT_ROS2_CLIENT_PUBLIC LiveKitNode
   : public rclcpp_lifecycle::LifecycleNode
 {
@@ -48,6 +51,9 @@ private:
 
   // Reentrant group used to post SDK-thread callbacks back to the ROS2 executor.
   rclcpp::CallbackGroup::SharedPtr sdk_callback_group_;
+
+  // Publishes ROS2 topics as LiveKit tracks.  Created on activate, destroyed on deactivate.
+  std::unique_ptr<TrackPublisher> track_publisher_;
 };
 
 }  // namespace livekit_ros2_client
