@@ -95,6 +95,26 @@ private:
   rclcpp::TimerBase::SharedPtr diag_timer_;
 
   void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
+
+  // ---------------------------------------------------------------------------
+  // Reconnection
+  // ---------------------------------------------------------------------------
+
+  // URL and token cached in on_activate so do_reconnect() needs no parameter reads.
+  std::string cached_url_;
+  std::string cached_token_;
+
+  // Pre-created in on_configure and left cancelled.  on_disconnected() calls
+  // reset() to arm it (thread-safe); do_reconnect() calls cancel() at entry
+  // (one-shot).  Destroyed in on_cleanup / on_shutdown.
+  rclcpp::TimerBase::SharedPtr reconnect_timer_;
+
+  // Called from the SDK onDisconnected callback (SDK thread).
+  // Only touches atomics and TimerBase::reset() — safe from any thread.
+  void on_disconnected();
+
+  // Runs on the ROS2 executor (reconnect_timer_ callback, 2 s after disconnect).
+  void do_reconnect();
 };
 
 }  // namespace livekit_ros2_client

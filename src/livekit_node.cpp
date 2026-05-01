@@ -190,12 +190,16 @@ LiveKitNode::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
 #ifdef LIVEKIT_FETCH_SDK
   // Register room-level callbacks before connect().  All callbacks run on the
-  // SDK thread pool; they must not call publisher->publish() directly.
-  // TrackSubscriber::on_video_frame / on_data_received are thread-safe and
-  // enqueue work for the MutuallyExclusive drain timer on the ROS2 executor.
-
+  // SDK thread pool; they must not touch ROS2 publishers/parameters directly.
+  // on_disconnected() is safe to call from the SDK thread (only touches atomics
+  // and TimerBase::reset()).  TrackSubscriber callbacks enqueue work for the
+  // MutuallyExclusive drain timer.
+  //
+  // When wiring:
+  //   #include "lifecycle_msgs/msg/transition.hpp"   // add to find_package too
+  //
   // room_->room.setOnDisconnected([this]() {
-  //   RCLCPP_WARN(get_logger(), "LiveKit room disconnected");
+  //   on_disconnected();
   // });
   // room_->room.setOnConnectionStateChanged([this](livekit::ConnectionState s) {
   //   RCLCPP_INFO(get_logger(), "Connection state: %d", static_cast<int>(s));
@@ -217,6 +221,14 @@ LiveKitNode::on_configure(const rclcpp_lifecycle::State & /*state*/)
     "Built without LIVEKIT_FETCH_SDK — room operations are no-ops. "
     "Rebuild with -DLIVEKIT_FETCH_SDK=ON to enable real connectivity.");
 #endif
+
+  // Pre-create the reconnect timer in cancelled state so on_disconnected() can
+  // arm it via reset() from the SDK thread without calling create_wall_timer
+  // on a non-executor thread.
+  reconnect_timer_ = create_wall_timer(
+    std::chrono::seconds(2),
+    [this]() {do_reconnect();});
+  reconnect_timer_->cancel();
 
   // Cache read-only params used inside the diagnostics hot path so that
   // produce_diagnostics() never touches the parameter mutex at 1 Hz.
@@ -291,17 +303,31 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   const std::string url = get_parameter("livekit_url").as_string();
   RCLCPP_INFO(get_logger(), "Connecting to LiveKit server at %s", url.c_str());
 
+  // Cache for use in do_reconnect() — must happen before any connect attempt
+  // so that a fast disconnect cannot race with an empty cached_token_.
+  cached_url_ = url;
+  cached_token_ = token;
+
   connection_state_.store(
     static_cast<int>(ConnectionState::CONNECTING), std::memory_order_relaxed);
 
 #ifdef LIVEKIT_FETCH_SDK
   // Connection failure must return FAILURE (→ inactive) rather than crash.
+  // Token expiry is caught first so it gets a human-readable message; the
+  // generic catch handles all other SDK errors.
   // try {
-  //   room_->room.connect(url, token);
+  //   room_->room.connect(cached_url_, cached_token_);
   //   room_->connected = true;
   //   RCLCPP_INFO(
   //     get_logger(), "Connected to room '%s'",
   //     get_parameter("room_name").as_string().c_str());
+  // } catch (const livekit::TokenExpiredError &) {
+  //   RCLCPP_ERROR(
+  //     get_logger(),
+  //     "LiveKit token expired. Re-run gen_token.sh and restart the node.");
+  //   connection_state_.store(
+  //     static_cast<int>(ConnectionState::DISCONNECTED), std::memory_order_relaxed);
+  //   return CallbackReturn::FAILURE;
   // } catch (const std::exception & e) {
   //   RCLCPP_ERROR(get_logger(), "Failed to connect: %s", e.what());
   //   connection_state_.store(
@@ -347,6 +373,13 @@ LiveKitNode::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Deactivating...");
 
+  // Cancel any pending reconnect before tearing down publishers/subscriptions.
+  // Without this, a 2 s reconnect timer armed just before an explicit deactivate
+  // could fire mid-teardown and call room->connect() on a half-destroyed node.
+  if (reconnect_timer_) {
+    reconnect_timer_->cancel();
+  }
+
   if (track_publisher_) {
     track_publisher_->deactivate();
     track_publisher_.reset();
@@ -377,6 +410,7 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Cleaning up...");
+  reconnect_timer_.reset();
   track_publisher_.reset();
   track_subscriber_.reset();
   room_.reset();
@@ -393,6 +427,7 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down...");
+  reconnect_timer_.reset();
   diag_timer_.reset();
   diag_updater_.reset();
   track_publisher_.reset();
@@ -408,6 +443,85 @@ LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
   room_.reset();
   RCLCPP_INFO(get_logger(), "Shut down");
   return CallbackReturn::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// on_disconnected — called from the SDK onDisconnected callback (SDK thread)
+//
+// Thread-safety contract: only touches std::atomic members and
+// TimerBase::reset() (which calls rcl_timer_reset(), a mutex-protected RCL
+// call).  No ROS2 publisher/subscription access, no create_wall_timer.
+//
+// NOTE: reconnect_timer_ is checked for null before use.  A slim TOCTOU
+// window exists between the null-check and reset() if on_cleanup runs
+// concurrently on the executor thread.  With SingleThreadedExecutor this
+// cannot happen; with MultiThreadedExecutor a shared_mutex around
+// reconnect_timer_ would be required.  Document this when wiring the SDK.
+// ---------------------------------------------------------------------------
+void LiveKitNode::on_disconnected()
+{
+  if (room_) {
+    room_->connected = false;
+  }
+  connection_state_.store(
+    static_cast<int>(ConnectionState::DISCONNECTED), std::memory_order_relaxed);
+
+  RCLCPP_WARN(
+    get_logger(), "LiveKit room disconnected. Attempting reconnect in 2 s...");
+
+  if (reconnect_timer_) {
+    reconnect_timer_->reset();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// do_reconnect — reconnect_timer_ callback, runs on the ROS2 executor
+//
+// One-shot: cancel() is the first action so the timer does not re-fire even
+// if reset() is called again before this callback exits.
+//
+// On token expiry: human-readable error, then deactivate (operator must
+// regenerate the token and restart the node).
+// On generic failure: same — deactivate and let the lifecycle manager decide
+// whether to recover.
+//
+// When wiring the real SDK, add to CMakeLists.txt / package.xml:
+//   find_package(lifecycle_msgs REQUIRED)
+// and add to ament_target_dependencies:
+//   lifecycle_msgs
+// Then uncomment:
+//   #include "lifecycle_msgs/msg/transition.hpp"
+// ---------------------------------------------------------------------------
+void LiveKitNode::do_reconnect()
+{
+  reconnect_timer_->cancel();  // one-shot: prevent re-firing
+
+#ifdef LIVEKIT_FETCH_SDK
+  // connection_state_ stays DISCONNECTED until connect() succeeds.
+  // try {
+  //   room_->room.connect(cached_url_, cached_token_);
+  //   room_->connected = true;
+  //   connection_state_.store(
+  //     static_cast<int>(ConnectionState::CONNECTED), std::memory_order_relaxed);
+  //   RCLCPP_INFO(get_logger(), "Reconnected to LiveKit room.");
+  // } catch (const livekit::TokenExpiredError &) {
+  //   RCLCPP_ERROR(
+  //     get_logger(),
+  //     "LiveKit token expired. Re-run gen_token.sh and restart the node.");
+  //   lifecycle_msgs::msg::Transition t;
+  //   t.id = lifecycle_msgs::msg::Transition::TRANSITION_DEACTIVATE;
+  //   trigger_transition(t);
+  // } catch (const std::exception & e) {
+  //   RCLCPP_ERROR(
+  //     get_logger(), "Reconnect failed. Node entering ErrorState. (%s)", e.what());
+  //   lifecycle_msgs::msg::Transition t;
+  //   t.id = lifecycle_msgs::msg::Transition::TRANSITION_DEACTIVATE;
+  //   trigger_transition(t);
+  // }
+  RCLCPP_WARN(get_logger(), "SDK reconnect not yet wired — stub only");
+#else
+  RCLCPP_WARN(get_logger(), "No SDK — reconnect is a no-op");
+#endif
 }
 
 // ---------------------------------------------------------------------------

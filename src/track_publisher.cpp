@@ -257,7 +257,14 @@ void TrackPublisher::Impl::on_video_msg(
     }
   }
   last_frame_time = now;
-  first_frame_received = true;
+  if (!first_frame_received) {
+    first_frame_received = true;
+    // Stop the warn timer — no need to keep firing a 500 ms callback that
+    // would return immediately on every tick for the rest of the session.
+    if (no_frame_warn_timer) {
+      no_frame_warn_timer->cancel();
+    }
+  }
 
   // Convert incoming encoding to BGR8 (shared memory when possible, copy otherwise).
   cv_bridge::CvImageConstPtr cv_img;
