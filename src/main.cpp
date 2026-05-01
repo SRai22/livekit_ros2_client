@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <rclcpp/rclcpp.hpp>
+#include "livekit_ros2_client/livekit_node.hpp"
+#include "rclcpp/rclcpp.hpp"
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  // Placeholder: LiveKitNode will be spun up here in a future ticket.
-  RCLCPP_INFO(rclcpp::get_logger("livekit_ros2_client"), "livekit_ros2_client_node started (stub)");
+
+  // MultiThreadedExecutor is required: the SDK posts callbacks back to the
+  // ROS2 executor via a Reentrant CallbackGroup, which must be serviced
+  // concurrently with the main spin loop.
+  rclcpp::executors::MultiThreadedExecutor executor;
+  auto node = std::make_shared<livekit_ros2_client::LiveKitNode>();
+  executor.add_node(node->get_node_base_interface());
+  executor.spin();
+
   rclcpp::shutdown();
   return 0;
 }

@@ -63,6 +63,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(livekit_ros2_client_node
   src/main.cpp
+  src/livekit_node.cpp
 )
 
 target_include_directories(livekit_ros2_client_node
@@ -104,6 +105,10 @@ install(TARGETS livekit_ros2_client_node
 
 install(DIRECTORY include/
   DESTINATION include
+)
+
+install(DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 # ---------------------------------------------------------------------------

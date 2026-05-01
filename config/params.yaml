@@ -1,0 +1,28 @@
+livekit_client:
+  ros__parameters:
+    # Connection
+    livekit_url: "ws://localhost:7880"
+    livekit_token: ""
+    room_name: "ros2_room"
+    participant_identity: "ros2_bot"
+
+    # Publishing — ROS2 → LiveKit
+    publish_video: true
+    video_topic: "/camera/image_raw"
+    video_codec: "h264"
+    video_width: 640
+    video_height: 480
+    video_fps: 30
+    publish_audio: false
+    audio_topic: "/audio/raw"
+    publish_data: true
+    data_topic: "/livekit/send_data"
+
+    # Subscribing — LiveKit → ROS2
+    subscribe_tracks: true
+    subscribed_video_topic: "/livekit/received_video"
+    subscribed_data_topic: "/livekit/received_data"
+
+    # Diagnostics
+    publish_diagnostics: true
+    diagnostics_period_sec: 1.0
