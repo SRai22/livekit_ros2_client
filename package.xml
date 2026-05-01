@@ -24,6 +24,9 @@
   <depend>diagnostic_updater</depend>
   <depend>image_transport</depend>
 
+  <!-- Runtime dependency for the synthetic_video_pub Python node -->
+  <exec_depend>python3-numpy</exec_depend>
+
   <!-- Test dependencies -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

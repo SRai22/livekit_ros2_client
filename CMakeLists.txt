@@ -113,6 +113,11 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS src/synthetic_video_pub.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME synthetic_video_pub
+)
+
 # ---------------------------------------------------------------------------
 # Testing
 # ---------------------------------------------------------------------------
