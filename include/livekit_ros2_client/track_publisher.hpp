@@ -51,6 +51,12 @@ public:
   /// Tears down subscriptions, timers, and SDK sources.  Call from on_deactivate.
   void deactivate();
 
+  /// Cumulative count of video frames processed (thread-safe, written from ROS2 callback).
+  uint64_t video_frames_sent() const;
+
+  /// Cumulative count of data-channel messages sent (thread-safe, written from ROS2 callback).
+  uint64_t data_messages_sent() const;
+
 private:
   // Defined in track_publisher.cpp; keeps SDK headers out of this public header.
   struct Impl;

@@ -68,6 +68,12 @@ public:
   /// before the message is published.
   void on_data_received(const uint8_t * data, size_t len);
 
+  /// Cumulative count of video frames published to ROS2 (thread-safe).
+  uint64_t video_frames_received() const;
+
+  /// Cumulative count of data messages published to ROS2 (thread-safe).
+  uint64_t data_messages_received() const;
+
 private:
   // Defined in track_subscriber.cpp; keeps SDK headers out of this header.
   struct Impl;

@@ -15,11 +15,21 @@
 #ifndef LIVEKIT_ROS2_CLIENT__LIVEKIT_NODE_HPP_
 #define LIVEKIT_ROS2_CLIENT__LIVEKIT_NODE_HPP_
 
+#include <atomic>
+#include <cstdint>
 #include <memory>
+#include <string>
 
 #include "livekit_ros2_client/visibility_control.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
+
+// Forward declarations — full headers are included in livekit_node.cpp only.
+namespace diagnostic_updater
+{
+class Updater;
+class DiagnosticStatusWrapper;
+}  // namespace diagnostic_updater
 
 namespace livekit_ros2_client
 {
@@ -58,6 +68,33 @@ private:
 
   // Receives LiveKit tracks and republishes on ROS2.  Created on configure, lives until cleanup.
   std::unique_ptr<TrackSubscriber> track_subscriber_;
+
+  // ---------------------------------------------------------------------------
+  // Diagnostics
+  // ---------------------------------------------------------------------------
+
+  // Tracked from lifecycle transitions; written atomically so that once the SDK
+  // is wired and the onConnectionStateChanged callback fires on the SDK thread,
+  // no mutex is needed here.
+  enum class ConnectionState : int { DISCONNECTED = 0, CONNECTING = 1, CONNECTED = 2 };
+  std::atomic<int> connection_state_{static_cast<int>(ConnectionState::DISCONNECTED)};
+
+  // Read-only parameters cached in on_configure to avoid repeated get_parameter()
+  // mutex acquisitions inside the diagnostics hot path.
+  std::string diag_room_name_;
+  bool diag_publish_video_{false};
+  bool diag_publish_audio_{false};
+  bool diag_subscribe_tracks_{false};
+
+  // Created in on_configure when publish_diagnostics=true; destroyed in on_cleanup.
+  // unique_ptr so that omitting diagnostics (publish_diagnostics=false) costs nothing.
+  std::unique_ptr<diagnostic_updater::Updater> diag_updater_;
+
+  // Wall timer that calls diag_updater_->force_update() at diagnostics_period_sec.
+  // Owned separately from the Updater so its period is fully controlled by our param.
+  rclcpp::TimerBase::SharedPtr diag_timer_;
+
+  void produce_diagnostics(diagnostic_updater::DiagnosticStatusWrapper & stat);
 };
 
 }  // namespace livekit_ros2_client

@@ -14,6 +14,7 @@
 
 #include "livekit_ros2_client/track_subscriber.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -65,6 +66,12 @@ struct TrackSubscriber::Impl
 
   // Drain timer runs in publish_callback_group (MutuallyExclusive).
   rclcpp::TimerBase::SharedPtr drain_timer;
+
+  // Cumulative counters — incremented on the ROS2 executor (drain timer), read from the
+  // diagnostics timer (also ROS2 executor).  std::atomic for correctness once the SDK
+  // callback thread can enqueue work that bumps these indirectly.
+  std::atomic<uint64_t> frames_received{0};
+  std::atomic<uint64_t> data_received{0};
 
   explicit Impl(
     rclcpp_lifecycle::LifecycleNode * n,
@@ -270,6 +277,7 @@ void TrackSubscriber::Impl::publish_video(
   msg.data.assign(bgr.datastart, bgr.dataend);
 
   video_pub->publish(msg);
+  frames_received.fetch_add(1u, std::memory_order_relaxed);
 }
 
 void TrackSubscriber::Impl::publish_data(std::vector<uint8_t> payload)
@@ -286,6 +294,20 @@ void TrackSubscriber::Impl::publish_data(std::vector<uint8_t> payload)
     payload.size() - 4);
 
   data_pub->publish(msg);
+  data_received.fetch_add(1u, std::memory_order_relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Counter getters — safe to call from any thread
+// ---------------------------------------------------------------------------
+uint64_t TrackSubscriber::video_frames_received() const
+{
+  return impl_->frames_received.load(std::memory_order_relaxed);
+}
+
+uint64_t TrackSubscriber::data_messages_received() const
+{
+  return impl_->data_received.load(std::memory_order_relaxed);
 }
 
 }  // namespace livekit_ros2_client

@@ -15,8 +15,12 @@
 #include "livekit_ros2_client/livekit_node.hpp"
 
 #include <cstdlib>
+#include <cstdint>
 #include <string>
 #include <vector>
+
+#include "diagnostic_msgs/msg/diagnostic_status.hpp"
+#include "diagnostic_updater/diagnostic_updater.hpp"
 
 #include "livekit_ros2_client/track_publisher.hpp"
 #include "livekit_ros2_client/track_subscriber.hpp"
@@ -214,6 +218,48 @@ LiveKitNode::on_configure(const rclcpp_lifecycle::State & /*state*/)
     "Rebuild with -DLIVEKIT_FETCH_SDK=ON to enable real connectivity.");
 #endif
 
+  // Cache read-only params used inside the diagnostics hot path so that
+  // produce_diagnostics() never touches the parameter mutex at 1 Hz.
+  diag_room_name_ = get_parameter("room_name").as_string();
+  diag_publish_video_ = get_parameter("publish_video").as_bool();
+  diag_publish_audio_ = get_parameter("publish_audio").as_bool();
+  diag_subscribe_tracks_ = get_parameter("subscribe_tracks").as_bool();
+
+  // -- Diagnostics -----------------------------------------------------------
+  if (get_parameter("publish_diagnostics").as_bool()) {
+    const double diag_period =
+      get_parameter("diagnostics_period_sec").as_double();
+    const std::string identity =
+      get_parameter("participant_identity").as_string();
+
+    diag_updater_ = std::make_unique<diagnostic_updater::Updater>(this);
+    diag_updater_->setHardwareID("livekit_ros2_client/" + identity);
+    diag_updater_->add(
+      "LiveKit Connection",
+      [this](diagnostic_updater::DiagnosticStatusWrapper & stat) {
+        produce_diagnostics(stat);
+      });
+
+    // Drive the updater at our configured rate with an explicit wall timer.
+    // The Updater's internal timer is pushed to a 1-hour period so it never
+    // fires independently and we don't double-publish.
+    diag_updater_->setPeriod(3600.0);
+    diag_timer_ = create_wall_timer(
+      std::chrono::duration<double>(diag_period),
+      [this]() {
+        if (diag_updater_) {
+          diag_updater_->force_update();
+        }
+      });
+
+    RCLCPP_INFO(
+      get_logger(),
+      "Diagnostics enabled (period=%.1f s, hw_id=livekit_ros2_client/%s)",
+      diag_period, identity.c_str());
+  } else {
+    RCLCPP_INFO(get_logger(), "Diagnostics disabled (publish_diagnostics=false)");
+  }
+
   RCLCPP_INFO(get_logger(), "Configuration complete");
   return CallbackReturn::SUCCESS;
 }
@@ -245,6 +291,9 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   const std::string url = get_parameter("livekit_url").as_string();
   RCLCPP_INFO(get_logger(), "Connecting to LiveKit server at %s", url.c_str());
 
+  connection_state_.store(
+    static_cast<int>(ConnectionState::CONNECTING), std::memory_order_relaxed);
+
 #ifdef LIVEKIT_FETCH_SDK
   // Connection failure must return FAILURE (→ inactive) rather than crash.
   // try {
@@ -255,6 +304,8 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   //     get_parameter("room_name").as_string().c_str());
   // } catch (const std::exception & e) {
   //   RCLCPP_ERROR(get_logger(), "Failed to connect: %s", e.what());
+  //   connection_state_.store(
+  //     static_cast<int>(ConnectionState::DISCONNECTED), std::memory_order_relaxed);
   //   return CallbackReturn::FAILURE;
   // }
   RCLCPP_WARN(get_logger(), "SDK connect() not yet wired — stub returns success");
@@ -263,6 +314,9 @@ LiveKitNode::on_activate(const rclcpp_lifecycle::State & /*state*/)
   RCLCPP_WARN(get_logger(), "No SDK — skipping room connect()");
   room_->connected = true;
 #endif
+
+  connection_state_.store(
+    static_cast<int>(ConnectionState::CONNECTED), std::memory_order_relaxed);
 
   // Build the data-channel publish callback and activate the track publisher.
   // The lambda is SDK-guarded; without the SDK it is a no-op.
@@ -309,6 +363,9 @@ LiveKitNode::on_deactivate(const rclcpp_lifecycle::State & /*state*/)
     room_->connected = false;
   }
 
+  connection_state_.store(
+    static_cast<int>(ConnectionState::DISCONNECTED), std::memory_order_relaxed);
+
   RCLCPP_INFO(get_logger(), "Deactivated");
   return CallbackReturn::SUCCESS;
 }
@@ -323,6 +380,8 @@ LiveKitNode::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
   track_publisher_.reset();
   track_subscriber_.reset();
   room_.reset();
+  diag_timer_.reset();
+  diag_updater_.reset();
   RCLCPP_INFO(get_logger(), "Cleaned up");
   return CallbackReturn::SUCCESS;
 }
@@ -334,6 +393,8 @@ LiveKitNode::CallbackReturn
 LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 {
   RCLCPP_INFO(get_logger(), "Shutting down...");
+  diag_timer_.reset();
+  diag_updater_.reset();
   track_publisher_.reset();
   track_subscriber_.reset();
   if (room_ && room_->connected) {
@@ -342,9 +403,88 @@ LiveKitNode::on_shutdown(const rclcpp_lifecycle::State & /*state*/)
 #endif
     room_->connected = false;
   }
+  connection_state_.store(
+    static_cast<int>(ConnectionState::DISCONNECTED), std::memory_order_relaxed);
   room_.reset();
   RCLCPP_INFO(get_logger(), "Shut down");
   return CallbackReturn::SUCCESS;
+}
+
+// ---------------------------------------------------------------------------
+// produce_diagnostics — called by diag_timer_ on the ROS2 executor
+//
+// NOTE — LifecyclePublisher visibility: diagnostic_updater::Updater calls
+// create_publisher() on this LifecycleNode, so its internal /diagnostics
+// publisher is a rclcpp_lifecycle::LifecyclePublisher.  It is deactivated
+// automatically when the node deactivates, meaning messages published while
+// the node is inactive are silently dropped.  Operators will therefore see
+// the ERROR status only while the node remains active (e.g. during SDK-level
+// disconnection handled by the reconnection logic) but not after an explicit
+// deactivate transition.  This is standard ROS2 lifecycle behaviour.
+//
+// NOTE — MultiThreadedExecutor: the null checks on track_publisher_ /
+// track_subscriber_ and their subsequent method calls are not atomic.  With
+// a SingleThreadedExecutor (the typical lifecycle node setup) this is safe
+// because on_deactivate and this callback are serialised.  If a
+// MultiThreadedExecutor is ever used, add a shared_mutex here.
+// ---------------------------------------------------------------------------
+void LiveKitNode::produce_diagnostics(
+  diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  using DS = diagnostic_msgs::msg::DiagnosticStatus;
+
+  const auto cs =
+    static_cast<ConnectionState>(connection_state_.load(std::memory_order_relaxed));
+
+  const char * cs_str = "DISCONNECTED";
+  if (cs == ConnectionState::CONNECTING) {
+    cs_str = "CONNECTING";
+  } else if (cs == ConnectionState::CONNECTED) {
+    cs_str = "CONNECTED";
+  }
+
+  stat.add("connection_state", cs_str);
+  stat.add("room_name", diag_room_name_);
+
+  // Participant count comes from the SDK room once wired; stub returns 0.
+  // Replace with room_->room.numParticipants() after SDK integration.
+  stat.add("participants", 0);
+
+  // Count LiveKit media tracks only (video + audio).  The data channel is
+  // published via localParticipant()->publishData(), not as a track, so
+  // publish_data must NOT be counted here.
+  int pub_tracks = 0;
+  if (track_publisher_) {
+    if (diag_publish_video_) {pub_tracks++;}
+    if (diag_publish_audio_) {pub_tracks++;}
+  }
+  const int sub_tracks = (track_subscriber_ && diag_subscribe_tracks_) ? 1 : 0;
+
+  stat.add("published_tracks", pub_tracks);
+  stat.add("subscribed_tracks", sub_tracks);
+
+  // Cumulative counters — atomic loads, safe from any thread.
+  const uint64_t vid_sent =
+    track_publisher_ ? track_publisher_->video_frames_sent() : 0u;
+  const uint64_t data_sent =
+    track_publisher_ ? track_publisher_->data_messages_sent() : 0u;
+  const uint64_t vid_recv =
+    track_subscriber_ ? track_subscriber_->video_frames_received() : 0u;
+  const uint64_t data_recv =
+    track_subscriber_ ? track_subscriber_->data_messages_received() : 0u;
+
+  stat.add("video_frames_sent", vid_sent);
+  stat.add("video_frames_received", vid_recv);
+  stat.add("data_messages_sent", data_sent);
+  stat.add("data_messages_received", data_recv);
+
+  if (cs != ConnectionState::CONNECTED) {
+    stat.summary(DS::ERROR, "Not connected to LiveKit room");
+  } else if (pub_tracks + sub_tracks == 0) {
+    stat.summary(DS::WARN, "Connected but no active tracks");
+  } else {
+    stat.summary(DS::OK, "Connected with active tracks");
+  }
 }
 
 }  // namespace livekit_ros2_client

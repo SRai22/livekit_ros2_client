@@ -14,6 +14,7 @@
 
 #include "livekit_ros2_client/track_publisher.hpp"
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <string>
@@ -66,6 +67,12 @@ struct TrackPublisher::Impl
 
   // Monotonically increasing data-channel sequence number (little-endian uint32 header)
   uint32_t data_seq_num{0};
+
+  // Cumulative counters — written from subscription callbacks (ROS2 executor thread),
+  // read from the diagnostics timer (also ROS2 executor).  std::atomic for correctness
+  // when the SDK is wired and callbacks may arrive from the SDK thread pool.
+  std::atomic<uint64_t> frames_sent{0};
+  std::atomic<uint64_t> data_sent{0};
 
 #ifdef LIVEKIT_FETCH_SDK
   // SDK objects that persist for the lifetime of the active track.
@@ -297,6 +304,8 @@ void TrackPublisher::Impl::on_video_msg(
     node->get_logger(),
     "Video frame %dx%d — SDK not available, I420 frame discarded", w, h);
 #endif
+
+  frames_sent.fetch_add(1u, std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,10 +344,24 @@ void TrackPublisher::Impl::on_data_msg(
   std::copy(msg->data.begin(), msg->data.end(), payload.begin() + 4);
 
   data_fn(payload);
+  data_sent.fetch_add(1u, std::memory_order_relaxed);
 
   RCLCPP_DEBUG(
     node->get_logger(),
     "Data message seq=%u len=%zu sent", seq, msg->data.size());
+}
+
+// ---------------------------------------------------------------------------
+// Counter getters — safe to call from any thread
+// ---------------------------------------------------------------------------
+uint64_t TrackPublisher::video_frames_sent() const
+{
+  return impl_->frames_sent.load(std::memory_order_relaxed);
+}
+
+uint64_t TrackPublisher::data_messages_sent() const
+{
+  return impl_->data_sent.load(std::memory_order_relaxed);
 }
 
 }  // namespace livekit_ros2_client
