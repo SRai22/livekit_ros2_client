@@ -37,6 +37,17 @@ jobs:
         with:
           required-ros-distributions: ${{ matrix.ros_distro }}
 
+      # ros-jazzy-ros-base ships the rosidl_typesupport_c cmake config but
+      # does NOT install a typesupport implementation, so find_package(rclcpp)
+      # fails with "No 'rosidl_typesupport_c' found".  Installing the FastRTPS
+      # and CycloneDDS middleware packages provides the required implementations.
+      - name: Install ROS2 middleware typesupport implementations
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            ros-${{ matrix.ros_distro }}-rmw-fastrtps-cpp \
+            ros-${{ matrix.ros_distro }}-rmw-cyclonedds-cpp
+
       # action-ros-ci creates a colcon workspace, installs rosdep deps,
       # builds with colcon, and runs colcon test.  BUILD_TESTING=ON is the
       # default so ament lint tests (copyright, cpplint, xmllint, …) run
