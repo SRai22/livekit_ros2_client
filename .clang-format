@@ -1,0 +1,38 @@
+# ROS 2 / ament_clang_format style — mirrors the upstream ROS 2 C++ style guide.
+# https://docs.ros.org/en/jazzy/Contributing/Code-Style-Language-Versions.html
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# Indentation
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 2
+
+# Braces
+BreakBeforeBraces: Attach
+
+# Line length — ROS 2 uses 99 chars
+ColumnLimit: 99
+
+# Pointer / reference alignment
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Access modifiers
+AccessModifierOffset: -2
+
+# Includes
+SortIncludes: true
+IncludeBlocks: Regroup
+
+# Constructor initializers
+ConstructorInitializerIndentWidth: 2
+BreakConstructorInitializers: BeforeColon
+
+# Misc
+SpaceBeforeParens: ControlStatements
+SpacesInAngles: false
+Cpp11BracedListStyle: true
+DerivePointerAlignment: false

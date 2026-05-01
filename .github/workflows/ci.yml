@@ -1,0 +1,96 @@
+name: CI
+
+# Triggers: every push to main/develop and every PR targeting main.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+# Cancel any earlier run for the same branch/PR so we don't waste minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build + test (includes ament lint tests via BUILD_TESTING=ON)
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Build & Test — ROS 2 ${{ matrix.ros_distro }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Primary target: Jazzy on Ubuntu 24.04
+          - ros_distro: jazzy
+            os: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up ROS 2 ${{ matrix.ros_distro }}
+        uses: ros-tooling/setup-ros@v0.7
+        with:
+          required-ros-distributions: ${{ matrix.ros_distro }}
+
+      # action-ros-ci creates a colcon workspace, installs rosdep deps,
+      # builds with colcon, and runs colcon test.  BUILD_TESTING=ON is the
+      # default so ament lint tests (copyright, cpplint, xmllint, …) run
+      # automatically because of ament_lint_auto_find_test_dependencies().
+      - name: Build and test
+        uses: ros-tooling/action-ros-ci@v0.3
+        with:
+          package-name: livekit_ros2_client
+          target-ros2-distro: ${{ matrix.ros_distro }}
+          # Extra CMake args forwarded to colcon build
+          colcon-defaults: |
+            {
+              "build": {
+                "cmake-args": [
+                  "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                  "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                  "-DLIVEKIT_FETCH_SDK=OFF"
+                ]
+              }
+            }
+
+      # Always upload test results so failures are visible in the Actions UI
+      # even when the step itself is skipped due to a build error.
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results-${{ matrix.ros_distro }}-${{ matrix.os }}
+          path: ros_ws/build/livekit_ros2_client/test_results/
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Package XML validation (fast, no build needed)
+  # ---------------------------------------------------------------------------
+  package-xml:
+    name: Validate package.xml
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install catkin_pkg
+        run: pip install catkin_pkg
+
+      - name: Validate package.xml
+        run: |
+          python3 - <<'EOF'
+          import catkin_pkg.package
+          import sys
+          try:
+              pkg = catkin_pkg.package.parse_package("package.xml")
+              print(f"package.xml OK — name={pkg.name}  version={pkg.version}  format={pkg.package_format}")
+          except Exception as e:
+              print(f"package.xml INVALID: {e}", file=sys.stderr)
+              sys.exit(1)
+          EOF

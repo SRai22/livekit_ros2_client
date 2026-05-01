@@ -1,0 +1,35 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>livekit_ros2_client</name>
+  <version>0.1.0</version>
+  <description>
+    Native ROS2 package that acts as a first-class LiveKit room participant.
+    Bridges ROS2 sensor streams (camera, audio, data) to and from LiveKit
+    tracks using the LiveKit C++ SDK — no browser or Node.js runtime required.
+  </description>
+  <maintainer email="shravansomashekara.rai@gmail.com">Shravan Somashekara Rai</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Runtime + build dependencies for ROS2 packages -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>diagnostic_updater</depend>
+  <depend>image_transport</depend>
+
+  <!-- Test dependencies -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
